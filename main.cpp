@@ -15,7 +15,7 @@ int main()
         return 1;
     }
 
-    // Create table if not exists
+    // Create table if does not exists
     const char *create_table_sql =
         "CREATE TABLE IF NOT EXISTS users ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
