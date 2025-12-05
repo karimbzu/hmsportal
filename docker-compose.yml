@@ -1,0 +1,12 @@
+version: '3.9'
+
+services:
+  crow_hospital:
+    build: .
+    container_name: crow_hospital
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./hospital.db:/app/hospital.db   # Persist SQLite database
+      - ./web:/app/web                   # Serve static files
+    restart: unless-stopped

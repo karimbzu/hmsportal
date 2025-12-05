@@ -1,0 +1,305 @@
+#include "crow.h"
+#include <sqlite3.h>
+#include <iostream>
+#include <sstream>
+#include <string>
+
+int main() {
+    crow::SimpleApp app;
+    sqlite3* db;
+    if (sqlite3_open("hospital.db", &db)) {
+        std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
+        return 1;
+    }
+
+    // Create tables
+    char* errMsg = 0;
+    std::string sql = R"=====( 
+        CREATE TABLE IF NOT EXISTS doctors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            specialization TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS patients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            disease TEXT NOT NULL,
+            doctor_id INTEGER,
+            FOREIGN KEY(doctor_id) REFERENCES doctors(id)
+        );
+    )=====";
+
+    if (sqlite3_exec(db, sql.c_str(), 0, 0, &errMsg) != SQLITE_OK) {
+        std::cerr << "SQL error: " << errMsg << std::endl;
+        sqlite3_free(errMsg);
+    }
+
+    // Serve main page
+    CROW_ROUTE(app, "/")([](){
+        return R"=====( 
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Hospital CRUD</title>
+<style>
+body { background-color: #f9f9f9; color: #333; font-family: Arial, sans-serif; }
+h1 { color: #444; }
+input, select { margin: 4px; padding: 6px; border-radius: 4px; border: 1px solid #ccc; }
+button { margin: 4px; padding: 6px 10px; border-radius: 4px; border: 1px solid #888; background-color: #eee; cursor: pointer; }
+button:hover { background-color: #ddd; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; background-color: #fff; }
+th, td { border: 1px solid #ccc; padding: 6px; text-align: left; }
+th { background-color: #f0f0f0; }
+canvas { background: #fff; margin-top: 20px; border:1px solid #ccc; }
+</style>
+</head>
+<body>
+<h1>Doctors</h1>
+<input id="doctor_name" placeholder="Name">
+<input id="doctor_spec" placeholder="Specialization">
+<button onclick="addDoctor()">Add Doctor</button>
+<table id="doctors_table"><thead><tr><th>ID</th><th>Name</th><th>Specialization</th><th>Actions</th></tr></thead><tbody></tbody></table>
+
+<h1>Patients</h1>
+<input id="patient_name" placeholder="Name">
+<input id="patient_disease" placeholder="Disease">
+<select id="patient_doctor"></select>
+<button onclick="addPatient()">Add Patient</button>
+<table id="patients_table"><thead><tr><th>ID</th><th>Name</th><th>Disease</th><th>Doctor</th><th>Actions</th></tr></thead><tbody></tbody></table>
+
+<canvas id="chart" width="400" height="200"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+async function loadDoctors() {
+    let resp = await fetch("/doctors");
+    let data = await resp.json();
+    let tbody = document.querySelector("#doctors_table tbody");
+    tbody.innerHTML = "";
+    let select = document.getElementById("patient_doctor");
+    select.innerHTML = "<option value=''>--Select--</option>";
+    data.forEach(d => {
+        let tr = document.createElement("tr");
+        tr.innerHTML = "<td>"+d.id+"</td><td>"+d.name+"</td><td>"+d.specialization+"</td>"+
+                       "<td><button onclick='editDoctor("+d.id+")'>Edit</button>"+
+                       "<button onclick='deleteDoctor("+d.id+")'>Delete</button></td>";
+        tbody.appendChild(tr);
+
+        let opt = document.createElement("option");
+        opt.value = d.id;
+        opt.text = d.name;
+        select.appendChild(opt);
+    });
+}
+
+async function addDoctor() {
+    let name = document.getElementById("doctor_name").value;
+    let spec = document.getElementById("doctor_spec").value;
+    await fetch("/doctors", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({name:name,specialization:spec})});
+    loadDoctors();
+}
+
+async function editDoctor(id){
+    let name = prompt("New name?");
+    let spec = prompt("New specialization?");
+    if(name && spec){
+        await fetch("/doctors/"+id, {method:"PUT", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({name:name,specialization:spec})});
+        loadDoctors();
+        loadPatients();
+    }
+}
+
+async function deleteDoctor(id){
+    if(confirm("Delete doctor?")) {
+        await fetch("/doctors/"+id,{method:"DELETE"});
+        loadDoctors();
+        loadPatients();
+    }
+}
+
+async function loadPatients() {
+    let resp = await fetch("/patients");
+    let data = await resp.json();
+    let tbody = document.querySelector("#patients_table tbody");
+    tbody.innerHTML = "";
+    data.forEach(p=>{
+        let tr = document.createElement("tr");
+        tr.innerHTML = "<td>"+p.id+"</td><td>"+p.name+"</td><td>"+p.disease+"</td><td>"+(p.doctor_name||"")+"</td>"+
+                       "<td><button onclick='editPatient("+p.id+")'>Edit</button>"+
+                       "<button onclick='deletePatient("+p.id+")'>Delete</button></td>";
+        tbody.appendChild(tr);
+    });
+    renderChart(data);
+}
+
+async function addPatient() {
+    let name = document.getElementById("patient_name").value;
+    let disease = document.getElementById("patient_disease").value;
+    let doctor_id = document.getElementById("patient_doctor").value;
+    await fetch("/patients",{method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({name:name,disease:disease,doctor_id:doctor_id})});
+    loadPatients();
+}
+
+async function editPatient(id){
+    let name = prompt("New name?");
+    let disease = prompt("New disease?");
+    let doctor_id = prompt("New doctor ID?");
+    if(name && disease){
+        await fetch("/patients/"+id,{method:"PUT", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({name:name,disease:disease,doctor_id:doctor_id})});
+        loadPatients();
+    }
+}
+
+async function deletePatient(id){
+    if(confirm("Delete patient?")) {
+        await fetch("/patients/"+id,{method:"DELETE"});
+        loadPatients();
+    }
+}
+
+function renderChart(patients){
+    let ctx = document.getElementById("chart").getContext("2d");
+    let counts = {};
+    patients.forEach(p=>{
+        let name = p.doctor_name || "Unassigned";
+        counts[name] = (counts[name]||0)+1;
+    });
+    new Chart(ctx, {type:"bar", data:{labels:Object.keys(counts), datasets:[{label:"Patients per Doctor",data:Object.values(counts),backgroundColor:"rgba(75,192,192,0.6)"}]}});
+}
+
+window.onload = function(){
+    loadDoctors();
+    loadPatients();
+}
+</script>
+</body>
+</html>
+)=====";
+    });
+
+    // Doctor CRUD
+    CROW_ROUTE(app, "/doctors")
+    .methods("GET"_method)
+    ([db](){
+        crow::json::wvalue result;
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"SELECT id,name,specialization FROM doctors",-1,&stmt,NULL);
+        int i=0;
+        while(sqlite3_step(stmt)==SQLITE_ROW){
+            result[i]["id"]=sqlite3_column_int(stmt,0);
+            result[i]["name"]=std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt,1)));
+            result[i]["specialization"]=std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt,2)));
+            i++;
+        }
+        sqlite3_finalize(stmt);
+        return result;
+    });
+
+    CROW_ROUTE(app, "/doctors").methods("POST"_method)
+    ([db](const crow::request& req){
+        auto x = crow::json::load(req.body);
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"INSERT INTO doctors(name,specialization) VALUES(?,?)",-1,&stmt,NULL);
+        sqlite3_bind_text(stmt,1,std::string(x["name"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_bind_text(stmt,2,std::string(x["specialization"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    CROW_ROUTE(app, "/doctors/<int>").methods("PUT"_method)
+    ([db](const crow::request& req,int id){
+        auto x = crow::json::load(req.body);
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"UPDATE doctors SET name=?, specialization=? WHERE id=?",-1,&stmt,NULL);
+        sqlite3_bind_text(stmt,1,std::string(x["name"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_bind_text(stmt,2,std::string(x["specialization"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_bind_int(stmt,3,id);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    CROW_ROUTE(app, "/doctors/<int>").methods("DELETE"_method)
+    ([db](int id){
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"DELETE FROM doctors WHERE id=?",-1,&stmt,NULL);
+        sqlite3_bind_int(stmt,1,id);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    // Patient CRUD
+    CROW_ROUTE(app, "/patients").methods("GET"_method)
+    ([db](){
+        crow::json::wvalue result;
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,
+            "SELECT p.id,p.name,p.disease,p.doctor_id,d.name FROM patients p LEFT JOIN doctors d ON p.doctor_id=d.id",-1,&stmt,NULL);
+        int i=0;
+        while(sqlite3_step(stmt)==SQLITE_ROW){
+            result[i]["id"]=sqlite3_column_int(stmt,0);
+            result[i]["name"]=std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt,1)));
+            result[i]["disease"]=std::string(reinterpret_cast<const char*>(sqlite3_column_text(stmt,2)));
+            result[i]["doctor_id"]=sqlite3_column_int(stmt,3);
+
+            const unsigned char* docName = sqlite3_column_text(stmt,4);
+            result[i]["doctor_name"]=docName ? reinterpret_cast<const char*>(docName) : "";
+            i++;
+        }
+        sqlite3_finalize(stmt);
+        return result;
+    });
+
+    CROW_ROUTE(app, "/patients").methods("POST"_method)
+    ([db](const crow::request& req){
+        auto x = crow::json::load(req.body);
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"INSERT INTO patients(name,disease,doctor_id) VALUES(?,?,?)",-1,&stmt,NULL);
+        sqlite3_bind_text(stmt,1,std::string(x["name"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_bind_text(stmt,2,std::string(x["disease"].s()).c_str(),-1,SQLITE_STATIC);
+        if(x.has("doctor_id") && x["doctor_id"].i()>0)
+            sqlite3_bind_int(stmt,3,x["doctor_id"].i());
+        else
+            sqlite3_bind_null(stmt,3);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    CROW_ROUTE(app, "/patients/<int>").methods("PUT"_method)
+    ([db](const crow::request& req,int id){
+        auto x = crow::json::load(req.body);
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"UPDATE patients SET name=?, disease=?, doctor_id=? WHERE id=?",-1,&stmt,NULL);
+        sqlite3_bind_text(stmt,1,std::string(x["name"].s()).c_str(),-1,SQLITE_STATIC);
+        sqlite3_bind_text(stmt,2,std::string(x["disease"].s()).c_str(),-1,SQLITE_STATIC);
+        if(x.has("doctor_id") && x["doctor_id"].i()>0)
+            sqlite3_bind_int(stmt,3,x["doctor_id"].i());
+        else
+            sqlite3_bind_null(stmt,3);
+        sqlite3_bind_int(stmt,4,id);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    CROW_ROUTE(app, "/patients/<int>").methods("DELETE"_method)
+    ([db](int id){
+        sqlite3_stmt* stmt;
+        sqlite3_prepare_v2(db,"DELETE FROM patients WHERE id=?",-1,&stmt,NULL);
+        sqlite3_bind_int(stmt,1,id);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return "ok";
+    });
+
+    app.port(8080).multithreaded().run();
+    sqlite3_close(db);
+}

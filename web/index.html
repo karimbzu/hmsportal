@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hospital Dashboard</title>
+    <link rel="stylesheet" href="css/bootstrap.css">
+</head>
+<body class="p-3">
+    <div class="container">
+        <h1>Hospital Dashboard</h1>
+
+        <h2>Doctors</h2>
+        <button class="btn btn-primary my-2" onclick="addDoctor()">Add Doctor</button>
+        <table class="table table-bordered" id="doctorsTable"></table>
+
+        <h2>Patients</h2>
+        <button class="btn btn-primary my-2" onclick="addPatient()">Add Patient</button>
+        <table class="table table-bordered" id="patientsTable"></table>
+
+        <h2>Patients per Doctor Chart</h2>
+        <canvas id="chart" width="600" height="300"></canvas>
+    </div>
+
+    <script src="js/bootstrap.js"></script>
+    <script src="js/chart.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
